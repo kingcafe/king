@@ -1,5 +1,3 @@
-<!DOCTYPE html>
-<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <title>King Cafe Table Orders</title>
@@ -149,6 +147,7 @@
 
   <button class="save-btn" onclick="saveOrder()">💾 Save Order</button>
   <button class="back-btn" onclick="backToTables()">↩ Back to Tables</button>
+  <button class="back-btn" onclick="undoLastAction()">↩ Undo Last</button>
 </div>
 
 <div id="allOrders">
@@ -160,23 +159,60 @@
 <script>
   const tableOrders = {};
   let currentTable = null;
-  const ITEM_PRICE = 5000;
+  let undoStack = [];
 
-  // Your Telegram bot token and chat ID
-  const telegramToken = '7769917776:AAH3S6oshqdyRjg-P0433hGbaUPSeuoAgTk';
-  const chatId = '1881744939'; // Your actual chat ID
-
+  // Updated categories with custom prices:
   const categories = {
-    Hookah: ['King 1', 'King 2', 'King 3', 'King 4', 'King 5', 'King 6', 'King 7', 'King 8', 'King 9', 'King 10', 'King 11', 'Dw Sew', 'Bnisht', 'Baghdadi', 'Limo'],
-    Foods: ['Pizza', 'Burger', 'Fries', 'Shawarma'],
-    Drinks: ['Tea', 'Coffee', 'Coke', 'Water'],
-    Drink2: ['Smoothie', 'Lemonade', 'Iced Tea'],
-    Drinkyy: ['Energy Drink', 'Milkshake', 'Cold Brew'],
-    Sweets: ['Pancake', 'Cupcake', 'Trilece', 'Triangle Banana Krep']
+    Hookah: [
+      {name: 'King 1', price: 5000},
+      {name: 'King 2', price: 5500},
+      {name: 'King 3', price: 6000},
+      {name: 'King 4', price: 5200},
+      {name: 'King 5', price: 5100},
+      {name: 'King 6', price: 5300},
+      {name: 'King 7', price: 5800},
+      {name: 'King 8', price: 4900},
+      {name: 'King 9', price: 4700},
+      {name: 'King 10', price: 5500},
+      {name: 'King 11', price: 5600},
+      {name: 'Dw Sew', price: 4500},
+      {name: 'Bnisht', price: 4800},
+      {name: 'Baghdadi', price: 5200},
+      {name: 'Limo', price: 4700},
+    ],
+    Foods: [
+      {name: 'Pizza', price: 7000},
+      {name: 'Burger', price: 6500},
+      {name: 'Fries', price: 3000},
+      {name: 'Shawarma', price: 5500},
+    ],
+    Drinks: [
+      {name: 'Tea', price: 1500},
+      {name: 'Coffee', price: 2500},
+      {name: 'Coke', price: 2000},
+      {name: 'Water', price: 1000},
+    ],
+    Drink2: [
+      {name: 'Smoothie', price: 4500},
+      {name: 'Lemonade', price: 4000},
+      {name: 'Iced Tea', price: 3500},
+    ],
+    Drinkyy: [
+      {name: 'Energy Drink', price: 5000},
+      {name: 'Milkshake', price: 6000},
+      {name: 'Cold Brew', price: 5500},
+    ],
+    Sweets: [
+      {name: 'Pancake', price: 3000},
+      {name: 'Cupcake', price: 2500},
+      {name: 'Trilece', price: 4000},
+      {name: 'Triangle Banana Krep', price: 4500},
+    ]
   };
 
   function createTables() {
     const container = document.getElementById('tables');
+    container.innerHTML = ''; // Clear in case
     for (let i = 1; i <= 60; i++) {
       const btn = document.createElement('button');
       btn.textContent = 'Table ' + i;
@@ -208,11 +244,12 @@
       const itemsDiv = document.createElement('div');
       itemsDiv.className = 'items';
 
-      items.forEach(item => {
+      items.forEach(itemObj => {
         const itemDiv = document.createElement('div');
         itemDiv.className = 'item';
-        itemDiv.textContent = item;
-        const qty = currentOrder[item] || 0;
+        itemDiv.textContent = itemObj.name;
+        itemDiv.setAttribute('data-price', itemObj.price);
+        const qty = currentOrder[itemObj.name]?.qty || 0;
         if (qty > 0) {
           itemDiv.classList.add('selected');
           itemDiv.setAttribute('data-qty', qty);
@@ -222,6 +259,7 @@
 
         itemDiv.onclick = () => {
           let q = parseInt(itemDiv.getAttribute('data-qty')) || 0;
+          undoStack.push({ el: itemDiv, prevQty: q });
           q++;
           itemDiv.setAttribute('data-qty', q);
           itemDiv.classList.add('selected');
@@ -231,6 +269,7 @@
         itemDiv.oncontextmenu = (e) => {
           e.preventDefault();
           let q = parseInt(itemDiv.getAttribute('data-qty')) || 0;
+          undoStack.push({ el: itemDiv, prevQty: q });
           q = Math.max(0, q - 1);
           itemDiv.setAttribute('data-qty', q);
           if (q === 0) itemDiv.classList.remove('selected');
@@ -256,10 +295,11 @@
     selectedItems.forEach(el => {
       const qty = parseInt(el.getAttribute('data-qty')) || 0;
       const item = el.textContent;
-      total += qty * ITEM_PRICE;
+      const price = parseInt(el.getAttribute('data-price')) || 0;
+      total += qty * price;
 
       const li = document.createElement('li');
-      li.textContent = `🍽️ ${item} x${qty} = ${qty * ITEM_PRICE} دینار`;
+      li.textContent = `🍽️ ${item} x${qty} = ${qty * price} دینار`;
       summaryList.appendChild(li);
     });
 
@@ -274,27 +314,31 @@
     selectedItems.forEach(el => {
       const item = el.textContent;
       const qty = parseInt(el.getAttribute('data-qty')) || 0;
+      const price = parseInt(el.getAttribute('data-price')) || 0;
       if (qty > 0) {
-        order[item] = qty;
-        message += `• ${item} x${qty} = ${qty * ITEM_PRICE} دینار\n`;
+        order[item] = { qty, price };
+        message += `• ${item} x${qty} = ${qty * price} دینار\n`;
       }
     });
 
-    const total = Object.values(order).reduce((sum, qty) => sum + qty * ITEM_PRICE, 0);
+    const total = Object.values(order).reduce((sum, o) => sum + o.qty * o.price, 0);
     message += `\n💰 Total: ${total.toLocaleString()} دینار`;
 
     tableOrders[currentTable] = order;
 
     sendToTelegram(message);
     alert(`✅ Order saved and sent for Table ${currentTable}`);
+
+    undoStack = [];
+
     backToTables();
   }
 
   function sendToTelegram(message) {
-    fetch(`https://api.telegram.org/bot${telegramToken}/sendMessage`, {
+    fetch(`https://api.telegram.org/bot7769917776:AAH3S6oshqdyRjg-P0433hGbaUPSeuoAgTk/sendMessage`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ chat_id: chatId, text: message })
+      body: JSON.stringify({ chat_id: '1881744939', text: message })
     }).catch(err => console.error('Telegram API error:', err));
   }
 
@@ -310,7 +354,7 @@
         const order = tableOrders[tableNum];
         const item = document.createElement('div');
         item.style.marginBottom = '10px';
-        const items = Object.entries(order).map(([name, qty]) => `${name} x${qty}`);
+        const items = Object.entries(order).map(([name, obj]) => `${name} x${obj.qty}`);
         item.innerHTML = `<strong>Table ${tableNum}:</strong> ${items.join(', ')}`;
         ordersDiv.appendChild(item);
       });
@@ -327,9 +371,23 @@
     document.getElementById('allOrders').style.display = 'none';
   }
 
+  function undoLastAction() {
+    if (undoStack.length === 0) {
+      alert("❌ No action to undo.");
+      return;
+    }
+    const last = undoStack.pop();
+    last.el.setAttribute('data-qty', last.prevQty);
+    if (last.prevQty === 0) {
+      last.el.classList.remove('selected');
+    } else {
+      last.el.classList.add('selected');
+    }
+    updateTotal();
+  }
+
   createTables();
 </script>
 
 </body>
 </html>
-
